@@ -100,7 +100,7 @@ def send_enhanced_summary_digest(scanned_count, buoys_found, watch_found, regime
         return
         
     status_text = "🟢 Bullish (Healthy Trend)" if regime_status else "🔴 Defensive (Bearish Trend)"
-    top_vol_text = f"`{top_volume_ticker}` ({top_volume_val:.1f}x avg)" if top_volume_ticker else "`None Detected`"
+    top_vol_text = f"`{top_volume_ticker}` ({top_volume_val:.1f}x avg)" if top_volume_ticker else "`N/A (Filtered)`"
     avg_rsi_text = f"`{avg_rsi:.1f}`" if avg_rsi else "`N/A`"
     
     embed = {
@@ -245,6 +245,11 @@ if __name__ == "__main__":
             
     if SCAN_MODE == "FULL":
         avg_rsi = sum(rsi_accumulator) / len(rsi_accumulator) if rsi_accumulator else 0.0
+        
+        if not top_vol_ticker and rsi_accumulator:
+            top_vol_ticker = "N/A (Filtered)"
+            highest_vol_ratio = 0.0
+            
         send_enhanced_summary_digest(scanned_successfully, buoys_found, watch_found, market_is_healthy, top_vol_ticker, highest_vol_ratio, avg_rsi)
 
     print(f"Pro-Terminal Detailed Audit Complete for Mode: {SCAN_MODE}")
