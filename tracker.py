@@ -4,6 +4,8 @@ import requests
 import os
 import time
 import random
+import csv
+from pathlib import Path
 from pytickersymbols import PyTickerSymbols
 
 # --- CONFIGURATION & PARAMETERS ---
@@ -47,6 +49,24 @@ def check_market_regime():
     except Exception:
         pass
     return True
+
+def log_signal_to_csv(ticker, signal_type, current_price, rsi_val, volume_ratio):
+    file_path = Path("trade_history.csv")
+    file_exists = file_path.is_file()
+    
+    with open(file_path, mode="a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["Timestamp", "Ticker", "Signal", "Price", "RSI", "Volume_Ratio"])
+        
+        writer.writerow([
+            pd.Timestamp.utcnow().isoformat(),
+            ticker,
+            signal_type,
+            current_price,
+            rsi_val,
+            volume_ratio
+        ])
 
 def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop_loss, trailing_stop_target, rr_ratio, volume_ratio, turnover, recommended_shares, rsi_val, color):
     if not WEBHOOK_URL:
@@ -191,6 +211,10 @@ if __name__ == "__main__":
         result = analyze_stock(ticker)
         if result:
             sig_type, cur_p, t_be, s_l, t_t, rr, v_rat, turnover, rec_shares, rsi_v = result
+            
+            # Log the signal automatically to CSV for repository self-tracking
+            log_signal_to_csv(ticker, sig_type, cur_p, rsi_v, v_rat)
+            
             if sig_type == "BUY":
                 buoys_found += 1
                 if market_is_healthy:
