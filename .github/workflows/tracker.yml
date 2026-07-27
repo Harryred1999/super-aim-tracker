@@ -1,9 +1,9 @@
-name: AIM Stock Tracker V17 Hourly
+name: AIM Stock Tracker V20 15-Min
 
 on:
   schedule:
-    # Runs every hour from 08:00 to 17:00 UTC, Monday to Friday
-    - cron: '0 8-17 * * 1-5'
+    # Runs every 15 minutes from 08:00 to 17:00 UTC, Monday to Friday
+    - cron: '*/15 8-17 * * 1-5'
   workflow_dispatch: 
 
 jobs:
@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: setup-python@v4
         with:
           python-version: '3.10'
 
