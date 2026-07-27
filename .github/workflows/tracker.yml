@@ -1,9 +1,9 @@
-name: Daily AIM Stock Tracker
+name: AIM Stock Tracker V17 Hourly
 
 on:
   schedule:
-    # Runs at 17:30 UTC every weekday (Monday to Friday) right after market close
-    - cron: '30 17 * * 1-5'
+    # Runs every hour from 08:00 to 17:00 UTC, Monday to Friday
+    - cron: '0 8-17 * * 1-5'
   workflow_dispatch: 
 
 jobs:
@@ -24,7 +24,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install yfinance pandas requests pytickersymbols
 
+      - name: Determine Scan Mode
+        id: scan-mode
+        run: |
+          CURRENT_HOUR=$(date -u +%H)
+          echo "Current UTC hour: $CURRENT_HOUR"
+          if [ "$CURRENT_HOUR" -ge 17 ]; then
+            echo "MODE=FULL" >> $GITHUB_OUTPUT
+          else
+            echo "MODE=INTRADAY" >> $GITHUB_OUTPUT
+          fi
+
       - name: Run Tracker Script
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          SCAN_MODE: ${{ steps.scan-mode.outputs.MODE }}
         run: python tracker.py
