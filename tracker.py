@@ -21,7 +21,7 @@ logging.basicConfig(
     ]
 )
 
-# --- CONFIGURATION & PARAMETERS (£250 SIZING & PROFIT TARGETS) ---
+# --- BALANCED PRODUCTION CONFIGURATION & PARAMETERS ---
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 SCAN_MODE = os.getenv("SCAN_MODE", "FULL")
 MAX_WORKERS = 10  
@@ -29,14 +29,14 @@ MAX_WORKERS = 10
 HL_FEE_TOTAL = 13.90          
 CAPITAL_PER_TRADE = 250.0     
 MAX_ALLOWABLE_CASH_RISK = 12.50 
-TARGET_PROFIT_PCT = 15.0      # Ideal net profit percentage target
-MIN_DAILY_TURNOVER = 15000.0  
+TARGET_PROFIT_PCT = 12.0      # Balanced net profit percentage target
+MIN_DAILY_TURNOVER = 5000.0   # Optimized for AIM micro-cap liquidity
 MIN_MARKET_CAP = 3000000.0    
-MAX_MARKET_CAP = 1500000000.0 # AIM Tighter Ceiling: Excludes Main Market FTSE giants (£1.5B limit)
-MIN_VOLUME_MULTIPLIER = 2.2   
+MAX_MARKET_CAP = 1500000000.0 # Strict AIM Ceiling: Excludes Main Market FTSE giants (£1.5B limit)
+MIN_VOLUME_MULTIPLIER = 1.5   # Realistic volume expansion threshold
 ESTIMATED_SPREAD_DRAG = 0.025 
-MIN_RISK_REWARD_RATIO = 2.0   
-MAX_DAY_GAIN_PCT = 12.0       # Safety filter: Skip if stock already surged >12% today
+MIN_RISK_REWARD_RATIO = 1.5   # Balanced risk-to-reward requirement
+MAX_DAY_GAIN_PCT = 15.0       # Safety filter: Skip if stock already surged >15% today
 
 def get_dynamic_aim_universe():
     logging.info("Drawing live equity universe via TradingView API...")
@@ -117,7 +117,7 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
         "title": f"🛡️⚖️ {signal_type} ({SCAN_MODE}): {ticker}",
         "url": yahoo_url,
         "color": color,
-        "description": f"V25 Institutional Setup with **{TARGET_PROFIT_PCT}% Profit Target** (£250 Sizing).",
+        "description": f"Optimized AIM Setup with **{TARGET_PROFIT_PCT}% Profit Target** (£250 Sizing).",
         "fields": [
             {"name": "💵 Current Price", "value": f"`{current_price:.2f}p`", "inline": True},
             {"name": "🛡️ True Break-Even", "value": f"`{true_break_even:.2f}p`", "inline": True},
@@ -129,7 +129,7 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
             {"name": "📊 Volume Surge", "value": f"`{volume_ratio:.1f}x`", "inline": True},
             {"name": "📦 Sized Shares (£12.50 Risk)", "value": f"`{recommended_shares} shares`", "inline": True}
         ],
-        "footer": {"text": f"AIM Engine V25 • Strict AIM Equity Edition"},
+        "footer": {"text": f"AIM Engine Optimized • Balanced Filter Edition"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     try:
@@ -152,7 +152,7 @@ def send_enhanced_summary_digest(scanned_count, buoys_found, watch_found, regime
     shares_text = "\n".join(shares_lines) if shares_lines else "`No data collected`"
     
     embed = {
-        "title": f"📊 End-of-Day V25 Institutional Digest",
+        "title": f"📊 End-of-Day Optimized AIM Digest",
         "color": 3447003,
         "description": f"Comprehensive multi-threaded session audit completed.",
         "fields": [
@@ -165,7 +165,7 @@ def send_enhanced_summary_digest(scanned_count, buoys_found, watch_found, regime
             {"name": "📉 Top 10 Lowest Market Caps", "value": caps_text, "inline": False},
             {"name": "📊 Top 10 Lowest Shares in Issue", "value": shares_text, "inline": False}
         ],
-        "footer": {"text": f"AIM Engine V25 • AIM Filter Active"},
+        "footer": {"text": f"AIM Engine Optimized • Filter Active"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     try:
@@ -278,7 +278,7 @@ def analyze_stock(ticker, market_3m_return):
         is_golden_cross = (yesterday['SMA_20'] <= yesterday['SMA_50']) and (today['SMA_20'] > today['SMA_50'])
         is_above_trend = current_price > today['SMA_20']
         is_above_vwap = current_price > today['VWAP_14']
-        rsi_healthy = 55.0 <= today['RSI_14'] <= 75.0
+        rsi_healthy = 50.0 <= today['RSI_14'] <= 75.0
 
         obv_accumulating = len(df) >= 4 and df['OBV'].iloc[-1] > df['OBV'].iloc[-4]
         stock_3m_return = (df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1.0
@@ -289,7 +289,7 @@ def analyze_stock(ticker, market_3m_return):
             
         elif SCAN_MODE == "FULL":
             distance_to_ma = abs(current_price - today['SMA_50']) / today['SMA_50']
-            if distance_to_ma <= 0.008 and is_above_vwap and obv_accumulating and relative_strength_ok and weekly_trend_ok and rsi_healthy and rr_ratio >= MIN_RISK_REWARD_RATIO:
+            if distance_to_ma <= 0.012 and is_above_vwap and obv_accumulating and relative_strength_ok and weekly_trend_ok and rsi_healthy and rr_ratio >= MIN_RISK_REWARD_RATIO:
                 return ("WATCH", current_price, true_break_even_price, stop_loss, target_sell_price, ideal_profit_gbp, rr_ratio, volume_ratio, daily_turnover, recommended_shares, today['RSI_14']), metrics, ticker
 
     except Exception:
@@ -303,7 +303,7 @@ if __name__ == "__main__":
     df_mkt_series, market_3m_return = get_market_benchmark_returns()
     market_is_healthy = check_market_regime(df_mkt_series)
     
-    logging.info(f"Executing V25 Profit Target audit in [{SCAN_MODE}] mode across {len(tickers)} symbols...")
+    logging.info(f"Executing optimized AIM audit in [{SCAN_MODE}] mode across {len(tickers)} symbols...")
 
     buoys_found = 0
     watch_found = 0
@@ -359,4 +359,4 @@ if __name__ == "__main__":
             
         send_enhanced_summary_digest(scanned_successfully, buoys_found, watch_found, market_is_healthy, top_vol_ticker, highest_vol_ratio, avg_rsi, all_market_caps[:10], all_shares_data[:10])
 
-    logging.info(f"Profit Target Audit Complete. Successfully analyzed {scanned_successfully} records.")
+    logging.info(f"Optimized Audit Complete. Successfully analyzed {scanned_successfully} records.")
