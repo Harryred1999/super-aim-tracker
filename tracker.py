@@ -106,12 +106,13 @@ def send_enhanced_summary_digest(scanned_count, buoys_found, watch_found, regime
     # Build formatted text blocks for the tables
     caps_lines = []
     for rank, (t, cap) in enumerate(lowest_caps, 1):
-        caps_lines.append(f"`{rank}.` **{t}** — £{cap:,.0f}")
+        caps_lines.append(f"`{rank:2d}.` **{t}** — £{cap:,.0f}")
     caps_text = "\n".join(caps_lines) if caps_lines else "`No data collected`"
 
     shares_lines = []
     for rank, (t, shs) in enumerate(lowest_shares, 1):
-        shares_lines.append(f"`{rank}.` **{t}** — {shs:,.0f} shares")
+        shares_text_formatted = f"{int(shs):,}"
+        shares_lines.append(f"`{rank:2d}.` **{t}** — {shares_text_formatted} shares")
     shares_text = "\n".join(shares_lines) if shares_lines else "`No data collected`"
     
     embed = {
@@ -134,18 +135,27 @@ def send_enhanced_summary_digest(scanned_count, buoys_found, watch_found, regime
     requests.post(WEBHOOK_URL, json={"embeds": [embed]})
 
 def analyze_stock(ticker):
+    metrics = {}
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info
-        market_cap = info.get('marketCap', 0)
-        shares_outstanding = info.get('sharesOutstanding', 0)
-
-        if market_cap and market_cap < MIN_MARKET_CAP:
-            return None, None
+        info = stock.info or {}
+        market_cap = info.get('marketCap', 0) or 0
+        shares_outstanding = info.get('sharesOutstanding', 0) or 0
 
         df = stock.history(period="6mo")
         if df.empty or len(df) < 50:
             return None, None
+
+        current_price = df['Close'].iloc[-1]
+        
+        # Calculate implied shares if Yahoo info missing
+        if not shares_outstanding and market_cap > 0 and current_price > 0:
+            shares_outstanding = market_cap / (current_price / 100.0)
+
+        metrics = {
+            "market_cap": market_cap,
+            "shares_outstanding": shares_outstanding
+        }
 
         df['SMA_20'] = df['Close'].rolling(window=20).mean()
         df['SMA_50'] = df['Close'].rolling(window=50).mean()
@@ -165,26 +175,25 @@ def analyze_stock(ticker):
 
         today = df.iloc[-1]
         yesterday = df.iloc[-2]
-        current_price = today['Close']
         current_atr = today['ATR_14']
         current_rsi = today['RSI_14']
         
         if current_price <= 0 or pd.isna(current_atr) or pd.isna(current_rsi):
-            return None, None
+            return None, metrics
 
-        daily_turnover = (today['Volume'] * current_price) / 100
-        if daily_turnover < MIN_DAILY_TURNOVER:
-            return None, None
+        metrics["rsi"] = current_rsi
 
         avg_volume = yesterday['Vol_20'] if (yesterday['Vol_20'] and yesterday['Vol_20'] > 0) else 1
         volume_ratio = today['Volume'] / avg_volume
-        
-        metrics = {
-            "rsi": current_rsi,
-            "volume_ratio": volume_ratio,
-            "market_cap": market_cap,
-            "shares_outstanding": shares_outstanding
-        }
+        metrics["volume_ratio"] = volume_ratio
+
+        # Apply trading filters after logging base metrics
+        if market_cap and market_cap < MIN_MARKET_CAP:
+            return None, metrics
+
+        daily_turnover = (today['Volume'] * current_price) / 100
+        if daily_turnover < MIN_DAILY_TURNOVER:
+            return None, metrics
 
         raw_shares = CAPITAL_PER_TRADE / (current_price / 100)
         fee_per_share_impact = (HL_FEE_TOTAL / raw_shares) * 100
@@ -222,7 +231,7 @@ def analyze_stock(ticker):
 
     except Exception:
         pass
-    return None, None
+    return None, metrics
 
 if __name__ == "__main__":
     tickers = get_dynamic_aim_universe()
@@ -242,13 +251,14 @@ if __name__ == "__main__":
     for ticker in tickers:
         result, metrics = analyze_stock(ticker)
         
-        if metrics and metrics.get("rsi"):
-            scanned_successfully += 1
-            rsi_accumulator.append(metrics["rsi"])
-            
-            if metrics["volume_ratio"] > highest_vol_ratio:
-                highest_vol_ratio = metrics["volume_ratio"]
-                top_vol_ticker = ticker
+        if metrics:
+            if metrics.get("rsi"):
+                scanned_successfully += 1
+                rsi_accumulator.append(metrics["rsi"])
+                
+                if metrics.get("volume_ratio", 0) > highest_vol_ratio:
+                    highest_vol_ratio = metrics["volume_ratio"]
+                    top_vol_ticker = ticker
                 
             if metrics.get("market_cap", 0) > 0:
                 all_market_caps.append((ticker, metrics["market_cap"]))
