@@ -90,18 +90,29 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
             {"name": "💷 Daily Turnover", "value": f"`£{turnover:,.0f}`", "inline": True},
             {"name": "📦 Sized Risk (£15)", "value": f"`{recommended_shares} shares`", "inline": True}
         ],
-        "footer": {"text": f"AIM Engine V21 • Pro-Terminal Algorithmic Edition"},
+        "footer": {"text": f"AIM Engine V22 • Pro-Terminal Algorithmic Edition"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     requests.post(WEBHOOK_URL, json={"embeds": [embed]})
 
-def send_enhanced_summary_digest(scanned_count, buoys_found, watch_found, regime_status, top_volume_ticker, top_volume_val, avg_rsi):
+def send_enhanced_summary_digest(scanned_count, buoys_found, watch_found, regime_status, top_volume_ticker, top_volume_val, avg_rsi, lowest_caps, lowest_shares):
     if not WEBHOOK_URL:
         return
         
     status_text = "🟢 Bullish (Healthy Trend)" if regime_status else "🔴 Defensive (Bearish Trend)"
     top_vol_text = f"`{top_volume_ticker}` ({top_volume_val:.1f}x avg)" if top_volume_ticker else "`N/A (Filtered)`"
     avg_rsi_text = f"`{avg_rsi:.1f}`" if avg_rsi else "`N/A`"
+
+    # Build formatted text blocks for the tables
+    caps_lines = []
+    for rank, (t, cap) in enumerate(lowest_caps, 1):
+        caps_lines.append(f"`{rank}.` **{t}** — £{cap:,.0f}")
+    caps_text = "\n".join(caps_lines) if caps_lines else "`No data collected`"
+
+    shares_lines = []
+    for rank, (t, shs) in enumerate(lowest_shares, 1):
+        shares_lines.append(f"`{rank}.` **{t}** — {shs:,.0f} shares")
+    shares_text = "\n".join(shares_lines) if shares_lines else "`No data collected`"
     
     embed = {
         "title": f"📊 End-of-Day Pro-Terminal Detailed Digest",
@@ -113,9 +124,11 @@ def send_enhanced_summary_digest(scanned_count, buoys_found, watch_found, regime
             {"name": "📈 Universe Avg RSI", "value": avg_rsi_text, "inline": True},
             {"name": "🚀 Top Volume Leader", "value": top_vol_text, "inline": True},
             {"name": "🚨 Strong Buys Flagged", "value": f"`{buoys_found}`", "inline": True},
-            {"name": "⭐ Watchlist Setups", "value": f"`{watch_found}`", "inline": True}
+            {"name": "⭐ Watchlist Setups", "value": f"`{watch_found}`", "inline": True},
+            {"name": "📉 Top 10 Lowest Market Caps", "value": caps_text, "inline": False},
+            {"name": "📊 Top 10 Lowest Shares in Issue", "value": shares_text, "inline": False}
         ],
-        "footer": {"text": f"AIM Engine V21 • Enhanced Analytics Complete"},
+        "footer": {"text": f"AIM Engine V22 • Market Structure Tables Complete"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     requests.post(WEBHOOK_URL, json={"embeds": [embed]})
@@ -125,6 +138,8 @@ def analyze_stock(ticker):
         stock = yf.Ticker(ticker)
         info = stock.info
         market_cap = info.get('marketCap', 0)
+        shares_outstanding = info.get('sharesOutstanding', 0)
+
         if market_cap and market_cap < MIN_MARKET_CAP:
             return None, None
 
@@ -166,7 +181,9 @@ def analyze_stock(ticker):
         
         metrics = {
             "rsi": current_rsi,
-            "volume_ratio": volume_ratio
+            "volume_ratio": volume_ratio,
+            "market_cap": market_cap,
+            "shares_outstanding": shares_outstanding
         }
 
         raw_shares = CAPITAL_PER_TRADE / (current_price / 100)
@@ -210,7 +227,7 @@ def analyze_stock(ticker):
 if __name__ == "__main__":
     tickers = get_dynamic_aim_universe()
     market_is_healthy = check_market_regime()
-    print(f"Executing V21 Pro-Terminal audit in [{SCAN_MODE}] mode across {len(tickers)} symbols...")
+    print(f"Executing V22 Pro-Terminal audit in [{SCAN_MODE}] mode across {len(tickers)} symbols...")
 
     buoys_found = 0
     watch_found = 0
@@ -218,6 +235,9 @@ if __name__ == "__main__":
     rsi_accumulator = []
     highest_vol_ratio = 0.0
     top_vol_ticker = None
+    
+    all_market_caps = []
+    all_shares_data = []
 
     for ticker in tickers:
         result, metrics = analyze_stock(ticker)
@@ -225,9 +245,16 @@ if __name__ == "__main__":
         if metrics and metrics.get("rsi"):
             scanned_successfully += 1
             rsi_accumulator.append(metrics["rsi"])
+            
             if metrics["volume_ratio"] > highest_vol_ratio:
                 highest_vol_ratio = metrics["volume_ratio"]
                 top_vol_ticker = ticker
+                
+            if metrics.get("market_cap", 0) > 0:
+                all_market_caps.append((ticker, metrics["market_cap"]))
+                
+            if metrics.get("shares_outstanding", 0) > 0:
+                all_shares_data.append((ticker, metrics["shares_outstanding"]))
 
         if result:
             sig_type, cur_p, t_be, s_l, t_t, rr, v_rat, turnover, rec_shares, rsi_v = result
@@ -250,6 +277,13 @@ if __name__ == "__main__":
             top_vol_ticker = "N/A (Filtered)"
             highest_vol_ratio = 0.0
             
-        send_enhanced_summary_digest(scanned_successfully, buoys_found, watch_found, market_is_healthy, top_vol_ticker, highest_vol_ratio, avg_rsi)
+        # Sort and get top 10 lowest values
+        all_market_caps.sort(key=lambda x: x[1])
+        lowest_caps = all_market_caps[:10]
+
+        all_shares_data.sort(key=lambda x: x[1])
+        lowest_shares = all_shares_data[:10]
+            
+        send_enhanced_summary_digest(scanned_successfully, buoys_found, watch_found, market_is_healthy, top_vol_ticker, highest_vol_ratio, avg_rsi, lowest_caps, lowest_shares)
 
     print(f"Pro-Terminal Detailed Audit Complete for Mode: {SCAN_MODE}")
