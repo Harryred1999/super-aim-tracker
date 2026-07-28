@@ -21,22 +21,26 @@ logging.basicConfig(
     ]
 )
 
-# --- BALANCED PRODUCTION CONFIGURATION & PARAMETERS ---
+# --- BALANCED PRODUCTION CONFIGURATION (£300 STARTING LIMIT) ---
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 SCAN_MODE = os.getenv("SCAN_MODE", "FULL")
 MAX_WORKERS = 10  
 
 HL_FEE_TOTAL = 13.90          
-CAPITAL_PER_TRADE = 250.0     
-MAX_ALLOWABLE_CASH_RISK = 12.50 
-TARGET_PROFIT_PCT = 12.0      # Balanced net profit percentage target
-MIN_DAILY_TURNOVER = 5000.0   # Optimized for AIM micro-cap liquidity
-MIN_MARKET_CAP = 3000000.0    
-MAX_MARKET_CAP = 1500000000.0 # Strict AIM Ceiling: Excludes Main Market FTSE giants (£1.5B limit)
-MIN_VOLUME_MULTIPLIER = 1.5   # Realistic volume expansion threshold
+CAPITAL_PER_TRADE = 300.0     # Updated to £300 starting limit per trade
+MAX_ALLOWABLE_CASH_RISK = 10.0 # Proportionally scaled risk (£10 risk on £300 capital)
+TARGET_PROFIT_PCT = 15.0      
+MIN_DAILY_TURNOVER = 10000.0  
+MIN_MARKET_CAP = 5000000.0    
+MAX_MARKET_CAP = 1500000000.0 # Strict AIM Ceiling: £1.5B limit excludes Main Market giants
+MIN_VOLUME_MULTIPLIER = 1.3   
 ESTIMATED_SPREAD_DRAG = 0.025 
-MIN_RISK_REWARD_RATIO = 1.5   # Balanced risk-to-reward requirement
+MIN_RISK_REWARD_RATIO = 1.8   
 MAX_DAY_GAIN_PCT = 15.0       # Safety filter: Skip if stock already surged >15% today
+
+# --- BALANCED SENSITIVITY CONTROLS ---
+ENABLE_BOLLINGER_SQUEEZE = False     
+MAX_FREE_FLOAT_SHARES = 300000000.0  
 
 def get_dynamic_aim_universe():
     logging.info("Drawing live equity universe via TradingView API...")
@@ -61,7 +65,6 @@ def get_dynamic_aim_universe():
             aim_tickers = []
             for row in data.get("data", []):
                 ticker = row["d"][0]
-                # Filter out dots, warrants, structured notes, and weird codes like '0o', hyphens, or slashes
                 if "." not in ticker and "0o" not in ticker.lower() and "-" not in ticker and "/" not in ticker:
                     aim_tickers.append(f"{ticker}.L")
                     
@@ -107,17 +110,18 @@ def log_signal_to_csv(ticker, signal_type, current_price, target_sell_price, rsi
         
         writer.writerow([pd.Timestamp.utcnow().isoformat(), ticker, signal_type, current_price, target_sell_price, rsi_val, volume_ratio])
 
-def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop_loss, target_sell_price, ideal_profit, rr_ratio, volume_ratio, turnover, recommended_shares, rsi_val, color):
+def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop_loss, target_sell_price, ideal_profit, rr_ratio, volume_ratio, turnover, recommended_shares, rsi_val, float_shares, color):
     if not WEBHOOK_URL:
         return
         
     yahoo_url = f"https://finance.yahoo.com/quote/{ticker}"
+    float_display = f"{float_shares:,.0f}" if float_shares > 0 else "N/A"
     
     embed = {
-        "title": f"🛡️⚖️ {signal_type} ({SCAN_MODE}): {ticker}",
+        "title": f"🎯⚖️ Balanced {signal_type} ({SCAN_MODE}): {ticker}",
         "url": yahoo_url,
         "color": color,
-        "description": f"Optimized AIM Setup with **{TARGET_PROFIT_PCT}% Profit Target** (£250 Sizing).",
+        "description": f"AIM Setup with **{TARGET_PROFIT_PCT}% Profit Target** (£300 Sizing).",
         "fields": [
             {"name": "💵 Current Price", "value": f"`{current_price:.2f}p`", "inline": True},
             {"name": "🛡️ True Break-Even", "value": f"`{true_break_even:.2f}p`", "inline": True},
@@ -127,9 +131,10 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
             {"name": "⚖️ R:R Ratio", "value": f"`1:{rr_ratio:.1f}`", "inline": True},
             {"name": "⚡ RSI (14)", "value": f"`{rsi_val:.1f}`", "inline": True},
             {"name": "📊 Volume Surge", "value": f"`{volume_ratio:.1f}x`", "inline": True},
-            {"name": "📦 Sized Shares (£12.50 Risk)", "value": f"`{recommended_shares} shares`", "inline": True}
+            {"name": "🧬 Free Float", "value": f"`{float_display}`", "inline": True},
+            {"name": "📦 Sized Shares (£10 Risk)", "value": f"`{recommended_shares} shares`", "inline": True}
         ],
-        "footer": {"text": f"AIM Engine Optimized • Balanced Filter Edition"},
+        "footer": {"text": f"AIM Engine £300 Edition • Active"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     try:
@@ -152,7 +157,7 @@ def send_enhanced_summary_digest(scanned_count, buoys_found, watch_found, regime
     shares_text = "\n".join(shares_lines) if shares_lines else "`No data collected`"
     
     embed = {
-        "title": f"📊 End-of-Day Optimized AIM Digest",
+        "title": f"📊 End-of-Day £300 AIM Audit Digest",
         "color": 3447003,
         "description": f"Comprehensive multi-threaded session audit completed.",
         "fields": [
@@ -165,7 +170,7 @@ def send_enhanced_summary_digest(scanned_count, buoys_found, watch_found, regime
             {"name": "📉 Top 10 Lowest Market Caps", "value": caps_text, "inline": False},
             {"name": "📊 Top 10 Lowest Shares in Issue", "value": shares_text, "inline": False}
         ],
-        "footer": {"text": f"AIM Engine Optimized • Filter Active"},
+        "footer": {"text": f"AIM Engine £300 • Active"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     try:
@@ -179,18 +184,20 @@ def analyze_stock(ticker, market_3m_return):
         stock = yf.Ticker(ticker)
         info = stock.info or {}
         
-        # --- STRICT ASSET TYPE CHECK: REJECT BONDS, GILTS, AND FUNDS ---
         quote_type = info.get('quoteType', 'EQUITY')
         if quote_type and quote_type.upper() != 'EQUITY':
             return None, metrics, ticker
 
         market_cap = info.get('marketCap', 0) or 0
         
-        # --- STRICT AIM MARKET CAP CEILING (REJECT MAIN MARKET GIANTS) ---
         if market_cap < MIN_MARKET_CAP or market_cap > MAX_MARKET_CAP:
             return None, metrics, ticker
 
         shares_outstanding = info.get('sharesOutstanding', 0) or 0
+        float_shares = info.get('floatShares', 0) or 0
+
+        if float_shares > 0 and float_shares > MAX_FREE_FLOAT_SHARES:
+            return None, metrics, ticker
 
         df = stock.history(period="3mo")
         if df.empty or len(df) < 50:
@@ -202,7 +209,6 @@ def analyze_stock(ticker, market_3m_return):
         current_price = df['Close'].iloc[-1]
         today_volume = df['Volume'].iloc[-1]
 
-        # --- STRICT TRADING & LIQUIDITY CHECK (REJECT 0 VOLUME/0 PRICE DORMANT STOCKS) ---
         if pd.isna(current_price) or current_price <= 0 or pd.isna(today_volume) or today_volume <= 0:
             return None, metrics, ticker
         
@@ -238,7 +244,6 @@ def analyze_stock(ticker, market_3m_return):
         if pd.isna(today['ATR_14']) or pd.isna(today['RSI_14']) or yesterday['Close'] <= 0:
             return None, metrics, ticker
 
-        # --- SAFETY CHECK: AVOID OVERHEATED / EXHAUSTED GAPS ---
         daily_gain_pct = ((current_price - yesterday['Close']) / yesterday['Close']) * 100.0
         if daily_gain_pct > MAX_DAY_GAIN_PCT:
             return None, metrics, ticker
@@ -278,19 +283,19 @@ def analyze_stock(ticker, market_3m_return):
         is_golden_cross = (yesterday['SMA_20'] <= yesterday['SMA_50']) and (today['SMA_20'] > today['SMA_50'])
         is_above_trend = current_price > today['SMA_20']
         is_above_vwap = current_price > today['VWAP_14']
-        rsi_healthy = 50.0 <= today['RSI_14'] <= 75.0
+        rsi_healthy = 48.0 <= today['RSI_14'] <= 75.0
 
         obv_accumulating = len(df) >= 4 and df['OBV'].iloc[-1] > df['OBV'].iloc[-4]
         stock_3m_return = (df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1.0
         relative_strength_ok = stock_3m_return > market_3m_return
 
         if is_golden_cross and is_above_trend and is_above_vwap and obv_accumulating and relative_strength_ok and weekly_trend_ok and rsi_healthy and volume_ratio >= MIN_VOLUME_MULTIPLIER and rr_ratio >= MIN_RISK_REWARD_RATIO:
-            return ("BUY", current_price, true_break_even_price, stop_loss, target_sell_price, ideal_profit_gbp, rr_ratio, volume_ratio, daily_turnover, recommended_shares, today['RSI_14']), metrics, ticker
+            return ("BUY", current_price, true_break_even_price, stop_loss, target_sell_price, ideal_profit_gbp, rr_ratio, volume_ratio, daily_turnover, recommended_shares, today['RSI_14'], float_shares), metrics, ticker
             
         elif SCAN_MODE == "FULL":
             distance_to_ma = abs(current_price - today['SMA_50']) / today['SMA_50']
-            if distance_to_ma <= 0.012 and is_above_vwap and obv_accumulating and relative_strength_ok and weekly_trend_ok and rsi_healthy and rr_ratio >= MIN_RISK_REWARD_RATIO:
-                return ("WATCH", current_price, true_break_even_price, stop_loss, target_sell_price, ideal_profit_gbp, rr_ratio, volume_ratio, daily_turnover, recommended_shares, today['RSI_14']), metrics, ticker
+            if distance_to_ma <= 0.015 and is_above_vwap and obv_accumulating and relative_strength_ok and weekly_trend_ok and rsi_healthy and rr_ratio >= MIN_RISK_REWARD_RATIO:
+                return ("WATCH", current_price, true_break_even_price, stop_loss, target_sell_price, ideal_profit_gbp, rr_ratio, volume_ratio, daily_turnover, recommended_shares, today['RSI_14'], float_shares), metrics, ticker
 
     except Exception:
         pass
@@ -303,7 +308,7 @@ if __name__ == "__main__":
     df_mkt_series, market_3m_return = get_market_benchmark_returns()
     market_is_healthy = check_market_regime(df_mkt_series)
     
-    logging.info(f"Executing optimized AIM audit in [{SCAN_MODE}] mode across {len(tickers)} symbols...")
+    logging.info(f"Executing £300 AIM audit in [{SCAN_MODE}] mode across {len(tickers)} symbols...")
 
     buoys_found = 0
     watch_found = 0
@@ -336,17 +341,17 @@ if __name__ == "__main__":
                     all_shares_data.append((ticker, metrics["shares_outstanding"]))
 
             if result:
-                sig_type, cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v = result
+                sig_type, cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs = result
                 log_signal_to_csv(ticker, sig_type, cur_p, t_sell, rsi_v, v_rat)
-                logging.info(f"Signal Generated: {sig_type} for {ticker} (Target Sell: {t_sell:.2f}p)")
+                logging.info(f"Signal Generated: {sig_type} for {ticker} (Net Profit: £{ideal_prof:.2f})")
                 
                 if sig_type == "BUY":
                     buoys_found += 1
                     if market_is_healthy:
-                        send_discord_embed(ticker, "STRONG BUY", cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, 3066993)
+                        send_discord_embed(ticker, "STRONG BUY", cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, 3066993)
                 elif sig_type == "WATCH":
                     watch_found += 1
-                    send_discord_embed(ticker, "WATCHLIST", cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, 16776960)
+                    send_discord_embed(ticker, "WATCHLIST", cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, 16776960)
 
     if SCAN_MODE == "FULL":
         avg_rsi = sum(rsi_accumulator) / len(rsi_accumulator) if rsi_accumulator else 0.0
@@ -359,4 +364,4 @@ if __name__ == "__main__":
             
         send_enhanced_summary_digest(scanned_successfully, buoys_found, watch_found, market_is_healthy, top_vol_ticker, highest_vol_ratio, avg_rsi, all_market_caps[:10], all_shares_data[:10])
 
-    logging.info(f"Optimized Audit Complete. Successfully analyzed {scanned_successfully} records.")
+    logging.info(f"£300 Audit Complete. Successfully analyzed {scanned_successfully} records.")
