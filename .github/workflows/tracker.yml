@@ -2,6 +2,7 @@ name: AIM Stock Tracker V20 15-Min
 
 on:
   schedule:
+  # Runs every 15 mins between 08:00 and 17:45 UTC, Monday through Friday 
     - cron: '*/15 8-17 * * 1-5'
   workflow_dispatch: 
 
