@@ -27,13 +27,14 @@ WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 MAX_WORKERS = 10  
 
 HL_FEE_TOTAL = 13.90          
-CAPITAL_PER_TRADE = 250.0     
-MAX_ALLOWABLE_CASH_RISK = 50.0 
+CAPITAL_PER_TRADE = 500.0     
+MAX_ALLOWABLE_CASH_RISK = 100.0 
 MAX_PORTFOLIO_RISK = 300.0    # Aggregate portfolio risk cap
 
 MIN_MARKET_CAP = 2000000.0    
 MAX_MARKET_CAP = 1500000000.0 
 MAX_DAY_GAIN_PCT = 15.0       
+MAX_SHARE_PRICE_PENCE = 100.0 # Filter: Only stocks under 100p per share
 
 # --- SQLITE STATE & PORTFOLIO RISK DATABASE INITIALIZATION ---
 def init_db():
@@ -263,7 +264,7 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
         "title": f"🎯⚖️ {signal_type}: {ticker}",
         "url": yahoo_url,
         "color": color,
-        "description": f"Engine Alert with **{target_profit_pct}% Profit Target** & Trailing ATR Management (Dual Capital & Risk Capped).",
+        "description": f"Sub-100p Engine Alert with **{target_profit_pct}% Profit Target** & Trailing ATR Management.",
         "fields": [
             {"name": "💵 Current Price", "value": f"`{current_price:.2f}p`", "inline": True},
             {"name": "🛡️ True Break-Even", "value": f"`{true_break_even:.2f}p`", "inline": True},
@@ -277,7 +278,7 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
             {"name": "📦 Sized Shares (£500 Cap / £100 Risk)", "value": f"`{recommended_shares} shares`", "inline": True},
             {"name": "🧪 Historical Backtest", "value": f"`{bt_text}`", "inline": False}
         ],
-        "footer": {"text": f"AIM Engine • Dual-Cap Position Sizing Active"},
+        "footer": {"text": f"AIM Engine • Sub-100p Filter Active"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     try:
@@ -300,9 +301,9 @@ def send_enhanced_summary_digest(scanned_count, buys_found, lottery_found, watch
     shares_text = "\n".join(shares_lines) if shares_lines else "`No data collected`"
     
     embed = {
-        "title": f"📊 End-of-Day Engine Audit Digest",
+        "title": f"📊 End-of-Day Engine Audit Digest (Sub-100p)",
         "color": 3447003,
-        "description": f"Comprehensive asynchronous audit completed with dual-cap position sizing safeguards.",
+        "description": f"Comprehensive asynchronous audit completed with max share price filter (<= 100p).",
         "fields": [
             {"name": "🔍 Total Scanned", "value": f"`{scanned_count}`", "inline": True},
             {"name": "🌐 Market Regime", "value": f"`{status_text}`", "inline": True},
@@ -349,6 +350,10 @@ def analyze_stock(ticker, market_3m_return):
         if pd.isna(current_price) or current_price <= 0 or pd.isna(today_volume) or today_volume <= 0:
             return None, metrics, ticker
         
+        # --- NEW PRICE FILTER: Skip if price is strictly greater than 100 pence ---
+        if current_price > MAX_SHARE_PRICE_PENCE:
+            return None, metrics, ticker
+
         if not shares_outstanding and market_cap > 0 and current_price > 0:
             shares_outstanding = market_cap / (current_price / 100.0)
 
@@ -429,7 +434,6 @@ def analyze_stock(ticker, market_3m_return):
                 rr_ratio = reward_distance_pence / risk_distance_pence
                 risk_per_share_gbp = risk_distance_pence / 100.0
                 
-                # Dual-cap position sizing
                 shares_by_risk = int(MAX_ALLOWABLE_CASH_RISK / risk_per_share_gbp)
                 max_shares_by_capital = CAPITAL_PER_TRADE / (current_price / 100.0)
                 recommended_shares = max(1, min(shares_by_risk, int(max_shares_by_capital)))
@@ -452,7 +456,6 @@ def analyze_stock(ticker, market_3m_return):
                 rr_ratio = reward_distance_pence / risk_distance_pence
                 risk_per_share_gbp = risk_distance_pence / 100.0
                 
-                # Dual-cap position sizing
                 shares_by_risk = int(MAX_ALLOWABLE_CASH_RISK / risk_per_share_gbp)
                 max_shares_by_capital = CAPITAL_PER_TRADE / (current_price / 100.0)
                 recommended_shares = max(1, min(shares_by_risk, int(max_shares_by_capital)))
@@ -483,7 +486,7 @@ async def main_async():
     df_mkt_series, market_3m_return = get_market_benchmark_returns()
     market_is_healthy = check_market_regime(df_mkt_series)
     
-    logging.info(f"Executing Fully Asynchronous Dual-Strategy AIM audit across {len(tickers)} symbols...")
+    logging.info(f"Executing Fully Asynchronous Dual-Strategy AIM audit across {len(tickers)} symbols (Max Share Price: <= 100p)...")
 
     buys_found = 0
     lottery_found = 0
@@ -554,7 +557,7 @@ async def main_async():
         
     send_enhanced_summary_digest(scanned_successfully, buys_found, lottery_found, watch_found, market_is_healthy, top_vol_ticker, highest_vol_ratio, avg_rsi, all_market_caps[:10], all_shares_data[:10])
 
-    logging.info(f"Asynchronous Dual-Strategy Audit Complete. Successfully analyzed {scanned_successfully} records.")
+    logging.info(f"Asynchronous Dual-Strategy Audit Complete. Successfully analyzed {scanned_successfully} records under 100p.")
 
 if __name__ == "__main__":
     asyncio.run(main_async())
