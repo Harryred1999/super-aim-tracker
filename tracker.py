@@ -188,4 +188,126 @@ def analyze_stock(ticker):
 
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0,
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['RSI_14'] = 100 - (100 / (1 + rs))
+
+        today = df.iloc[-1]
+        yesterday = df.iloc[-2]
+        
+        if current_price <= 0 or pd.isna(today['ATR_14']) or pd.isna(today['RSI_14']):
+            return None, metrics, ticker
+
+        metrics["rsi"] = today['RSI_14']
+        avg_volume = yesterday['Vol_20'] if (yesterday['Vol_20'] and yesterday['Vol_20'] > 0) else 1
+        volume_ratio = today['Volume'] / avg_volume
+        metrics["volume_ratio"] = volume_ratio
+
+        if market_cap and market_cap < MIN_MARKET_CAP:
+            return None, metrics, ticker
+
+        daily_turnover = (today['Volume'] * current_price) / 100
+        if daily_turnover < MIN_DAILY_TURNOVER:
+            return None, metrics, ticker
+
+        raw_shares = CAPITAL_PER_TRADE / (current_price / 100)
+        fee_per_share_impact = (HL_FEE_TOTAL / raw_shares) * 100
+        true_break_even_price = current_price + fee_per_share_impact + (current_price * ESTIMATED_SPREAD_DRAG)
+        
+        stop_loss = current_price - (today['ATR_14'] * 1.5)
+        risk_distance_pence = current_price - stop_loss
+        trailing_stop_target = true_break_even_price + (today['ATR_14'] * 2.5)
+        
+        if risk_distance_pence <= 0:
+            return None, metrics, ticker
+            
+        rr_ratio = (trailing_stop_target - current_price) / risk_distance_pence
+        risk_per_share_gbp = risk_distance_pence / 100.0
+        recommended_shares = max(1, int(MAX_ALLOWABLE_CASH_RISK / risk_per_share_gbp) if risk_per_share_gbp > 0 else 0)
+
+        df_weekly = df.resample('W').agg({'Close': 'last'})
+        df_weekly['EMA_10'] = df_weekly['Close'].ewm(span=10, adjust=False).mean()
+        weekly_trend_ok = len(df_weekly) >= 10 and df_weekly['Close'].iloc[-1] >= df_weekly['EMA_10'].iloc[-1]
+
+        # Institutional checks
+        is_golden_cross = (yesterday['SMA_20'] <= yesterday['SMA_50']) and (today['SMA_20'] > today['SMA_50'])
+        is_above_trend = current_price > today['SMA_20']
+        is_above_vwap = current_price > today['VWAP_14'] # Elite Filter
+        rsi_healthy = 55.0 <= today['RSI_14'] <= 75.0
+
+        if is_golden_cross and is_above_trend and is_above_vwap and weekly_trend_ok and rsi_healthy and volume_ratio >= MIN_VOLUME_MULTIPLIER and rr_ratio >= MIN_RISK_REWARD_RATIO:
+            return ("BUY", current_price, true_break_even_price, stop_loss, trailing_stop_target, rr_ratio, volume_ratio, daily_turnover, recommended_shares, today['RSI_14']), metrics, ticker
+            
+        elif SCAN_MODE == "FULL":
+            distance_to_ma = abs(current_price - today['SMA_50']) / today['SMA_50']
+            if distance_to_ma <= 0.008 and is_above_vwap and weekly_trend_ok and rsi_healthy and rr_ratio >= MIN_RISK_REWARD_RATIO:
+                return ("WATCH", current_price, true_break_even_price, stop_loss, trailing_stop_target, rr_ratio, volume_ratio, daily_turnover, recommended_shares, today['RSI_14']), metrics, ticker
+
+    except Exception:
+        pass
+        
+    # Introduce tiny random jitter to prevent YFinance from blocking concurrent requests
+    time.sleep(random.uniform(0.1, 0.4)) 
+    return None, metrics, ticker
+
+if __name__ == "__main__":
+    tickers = get_dynamic_aim_universe()
+    market_is_healthy = check_market_regime()
+    logging.info(f"Executing V23 Elite audit in [{SCAN_MODE}] mode across {len(tickers)} symbols...")
+
+    buoys_found = 0
+    watch_found = 0
+    scanned_successfully = 0
+    rsi_accumulator = []
+    highest_vol_ratio = 0.0
+    top_vol_ticker = None
+    all_market_caps = []
+    all_shares_data = []
+
+    # Elite Multi-Threading Execution Block
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(analyze_stock, ticker): ticker for ticker in tickers}
+        
+        for future in concurrent.futures.as_completed(futures):
+            result, metrics, ticker = future.result()
+            
+            if metrics:
+                if metrics.get("rsi"):
+                    scanned_successfully += 1
+                    rsi_accumulator.append(metrics["rsi"])
+                    
+                    if metrics.get("volume_ratio", 0) > highest_vol_ratio:
+                        highest_vol_ratio = metrics["volume_ratio"]
+                        top_vol_ticker = ticker
+                    
+                if metrics.get("market_cap", 0) > 0:
+                    all_market_caps.append((ticker, metrics["market_cap"]))
+                    
+                if metrics.get("shares_outstanding", 0) > 0:
+                    all_shares_data.append((ticker, metrics["shares_outstanding"]))
+
+            if result:
+                sig_type, cur_p, t_be, s_l, t_t, rr, v_rat, turnover, rec_shares, rsi_v = result
+                log_signal_to_csv(ticker, sig_type, cur_p, rsi_v, v_rat)
+                logging.info(f"Signal Generated: {sig_type} for {ticker}")
+                
+                if sig_type == "BUY":
+                    buoys_found += 1
+                    if market_is_healthy:
+                        send_discord_embed(ticker, "STRONG BUY", cur_p, t_be, s_l, t_t, rr, v_rat, turnover, rec_shares, rsi_v, 3066993)
+                elif sig_type == "WATCH":
+                    watch_found += 1
+                    send_discord_embed(ticker, "WATCHLIST", cur_p, t_be, s_l, t_t, rr, v_rat, turnover, rec_shares, rsi_v, 16776960)
+
+    if SCAN_MODE == "FULL":
+        avg_rsi = sum(rsi_accumulator) / len(rsi_accumulator) if rsi_accumulator else 0.0
+        if not top_vol_ticker and rsi_accumulator:
+            top_vol_ticker = "N/A (Filtered)"
+            highest_vol_ratio = 0.0
+            
+        all_market_caps.sort(key=lambda x: x[1])
+        all_shares_data.sort(key=lambda x: x[1])
+            
+        send_enhanced_summary_digest(scanned_successfully, buoys_found, watch_found, market_is_healthy, top_vol_ticker, highest_vol_ratio, avg_rsi, all_market_caps[:10], all_shares_data[:10])
+
+    logging.info(f"Elite Audit Complete. Successfully analyzed {scanned_successfully} records.")
