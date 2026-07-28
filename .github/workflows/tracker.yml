@@ -1,19 +1,16 @@
-name: AIM Stock Tracker V20 15-Min
+name: AIM Engine Daily Scan
 
 on:
   schedule:
-    - cron: '*/15 8-17 * * 1-5'
-  workflow_dispatch: 
-
-permissions:
-  contents: write
+    - cron: '0 17 * * 1-5'
+      timezone: 'Europe/London'
+  workflow_dispatch:
 
 jobs:
   run-tracker:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -21,30 +18,14 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance pandas requests pytickersymbols
+          pip install yfinance pandas numpy requests
 
-      - name: Determine Scan Mode
-        id: scan-mode
-        run: |
-          CURRENT_HOUR=$(date -u +%H)
-          echo "Current UTC hour: $CURRENT_HOUR"
-          if [ "$CURRENT_HOUR" -ge 17 ]; then
-            echo "MODE=FULL" >> $GITHUB_OUTPUT
-          else
-            echo "MODE=INTRADAY" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Run Tracker Script
+      - name: Execute AIM Engine Tracker
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          SCAN_MODE: ${{ steps.scan-mode.outputs.MODE }}
-        run: python tracker.py
-
-      - name: Commit and Push Performance Logs
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "[Bot] Update algorithmic performance log"
-          file_pattern: "*.csv"
+          SCAN_MODE: "FULL"
+        run: |
+          python tracker.py
