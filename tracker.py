@@ -21,13 +21,13 @@ logging.basicConfig(
     ]
 )
 
-# --- UNIFIED DUAL-STRATEGY CONFIGURATION ---
+# --- UNIFIED DUAL-STRATEGY CONFIGURATION (HIGH-RISK AIM) ---
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 MAX_WORKERS = 10  
 
 HL_FEE_TOTAL = 13.90          
-CAPITAL_PER_TRADE = 300.0     
-MAX_ALLOWABLE_CASH_RISK = 10.0 
+CAPITAL_PER_TRADE = 500.0     
+MAX_ALLOWABLE_CASH_RISK = 100.0 
 
 MIN_MARKET_CAP = 2000000.0    
 MAX_MARKET_CAP = 1500000000.0 
@@ -118,7 +118,7 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
         "title": f"🎯⚖️ {signal_type}: {ticker}",
         "url": yahoo_url,
         "color": color,
-        "description": f"Unified Engine Alert with **{target_profit_pct}% Profit Target** (£300 Sizing).",
+        "description": f"Unified Engine Alert with **{target_profit_pct}% Profit Target** (£500 Sizing / £100 Risk).",
         "fields": [
             {"name": "💵 Current Price", "value": f"`{current_price:.2f}p`", "inline": True},
             {"name": "🛡️ True Break-Even", "value": f"`{true_break_even:.2f}p`", "inline": True},
@@ -129,7 +129,7 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
             {"name": "⚡ RSI (14)", "value": f"`{rsi_val:.1f}`", "inline": True},
             {"name": "📊 Volume Surge", "value": f"`{volume_ratio:.1f}x`", "inline": True},
             {"name": "🧬 Free Float", "value": f"`{float_display}`", "inline": True},
-            {"name": "📦 Sized Shares (£10 Risk)", "value": f"`{recommended_shares} shares`", "inline": True}
+            {"name": "📦 Sized Shares (£100 Risk)", "value": f"`{recommended_shares} shares`", "inline": True}
         ],
         "footer": {"text": f"AIM Unified Dual-Strategy Engine • Active"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
