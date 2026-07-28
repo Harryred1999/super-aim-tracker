@@ -35,6 +35,7 @@ MIN_MARKET_CAP = 3000000.0
 MIN_VOLUME_MULTIPLIER = 2.2   
 ESTIMATED_SPREAD_DRAG = 0.025 
 MIN_RISK_REWARD_RATIO = 2.0   
+MAX_DAY_GAIN_PCT = 12.0       # Safety filter: Skip if stock already surged >12% today (avoids chasing exhausted gaps)
 
 def get_dynamic_aim_universe():
     logging.info("Drawing live market universe via TradingView API...")
@@ -123,7 +124,7 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
             {"name": "📊 Volume Surge", "value": f"`{volume_ratio:.1f}x`", "inline": True},
             {"name": "📦 Sized Shares (£12.50 Risk)", "value": f"`{recommended_shares} shares`", "inline": True}
         ],
-        "footer": {"text": f"AIM Engine V25 • Target Profit Edition"},
+        "footer": {"text": f"AIM Engine V25 • Gap Safety Filter Edition"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     try:
@@ -159,7 +160,7 @@ def send_enhanced_summary_digest(scanned_count, buoys_found, watch_found, regime
             {"name": "📉 Top 10 Lowest Market Caps", "value": caps_text, "inline": False},
             {"name": "📊 Top 10 Lowest Shares in Issue", "value": shares_text, "inline": False}
         ],
-        "footer": {"text": f"AIM Engine V25 • Profit Target Integration Complete"},
+        "footer": {"text": f"AIM Engine V25 • Gap Safety Filter Active"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     try:
@@ -214,6 +215,11 @@ def analyze_stock(ticker, market_3m_return):
         yesterday = df.iloc[-2]
         
         if current_price <= 0 or pd.isna(today['ATR_14']) or pd.isna(today['RSI_14']):
+            return None, metrics, ticker
+
+        # --- SAFETY CHECK: AVOID OVERHEATED / EXHAUSTED GAPS ---
+        daily_gain_pct = ((current_price - yesterday['Close']) / yesterday['Close']) * 100.0
+        if daily_gain_pct > MAX_DAY_GAIN_PCT:
             return None, metrics, ticker
 
         metrics["rsi"] = today['RSI_14']
