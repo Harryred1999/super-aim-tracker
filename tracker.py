@@ -29,7 +29,6 @@ HL_FEE_TOTAL = 13.90
 CAPITAL_PER_TRADE = 300.0     
 MAX_ALLOWABLE_CASH_RISK = 10.0 
 
-# Universal bounds (inclusive of micro-caps for lottery logic)
 MIN_MARKET_CAP = 2000000.0    
 MAX_MARKET_CAP = 1500000000.0 
 MAX_DAY_GAIN_PCT = 15.0       
@@ -62,9 +61,10 @@ def get_dynamic_aim_universe():
                     aim_tickers.append(f"{ticker}.L")
                     
             aim_tickers = list(set(aim_tickers))
-            logging.info(f"Successfully drew and cleaned {len(aim_tickers)} live securities.")
-            return aim_tickers
-            
+            if aim_tickers:
+                logging.info(f"Successfully drew and cleaned {len(aim_tickers)} live securities from TradingView.")
+                return aim_tickers
+                
         except Exception as e:
             logging.warning(f"Attempt {attempt}/3 failed to draw live registry: {e}")
             if attempt < 3:
@@ -94,15 +94,18 @@ def check_market_regime(df_mkt):
     return True
 
 def log_signal_to_csv(ticker, signal_type, current_price, target_sell_price, rsi_val, volume_ratio):
-    file_path = Path("trade_history.csv")
-    file_exists = file_path.is_file()
-    
-    with open(file_path, mode="a", newline="") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["Timestamp", "Ticker", "Signal", "Price", "Target_Sell", "RSI", "Volume_Ratio"])
+    try:
+        file_path = Path("trade_history.csv")
+        file_exists = file_path.is_file()
         
-        writer.writerow([pd.Timestamp.utcnow().isoformat(), ticker, signal_type, current_price, target_sell_price, rsi_val, volume_ratio])
+        with open(file_path, mode="a", newline="") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["Timestamp", "Ticker", "Signal", "Price", "Target_Sell", "RSI", "Volume_Ratio"])
+            
+            writer.writerow([pd.Timestamp.utcnow().isoformat(), ticker, signal_type, current_price, target_sell_price, rsi_val, volume_ratio])
+    except Exception as e:
+        logging.error(f"Failed to log CSV for {ticker}: {e}")
 
 def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop_loss, target_sell_price, ideal_profit, rr_ratio, volume_ratio, turnover, recommended_shares, rsi_val, float_shares, target_profit_pct, color):
     if not WEBHOOK_URL:
@@ -248,7 +251,7 @@ def analyze_stock(ticker, market_3m_return):
         daily_turnover = (today['Volume'] * current_price) / 100
         
         raw_shares = CAPITAL_PER_TRADE / (current_price / 100)
-        fee_per_share_impact = (HL_FEE_TOTAL / raw_shares) * 100
+        fee_per_share_impact = (HL_FEE_TOTAL / raw_shares) * 100 if raw_shares > 0 else 0
         
         df_weekly = df.resample('W').agg({'Close': 'last'})
         df_weekly['EMA_10'] = df_weekly['Close'].ewm(span=10, adjust=False).mean()
@@ -270,10 +273,10 @@ def analyze_stock(ticker, market_3m_return):
         massive_volume = volume_ratio >= 3.0
 
         if is_micro_cap and low_float and massive_volume and is_above_vwap and rsi_healthy:
-            target_profit_pct = 50.0  # Aggressive multi-bagger target
+            target_profit_pct = 50.0  
             true_break_even_price = current_price + fee_per_share_impact + (current_price * ESTIMATED_SPREAD_DRAG)
             target_sell_price = true_break_even_price * (1.0 + (target_profit_pct / 100.0))
-            stop_loss = current_price - (today['ATR_14'] * 2.0) # Wider stop for micro-cap volatility
+            stop_loss = current_price - (today['ATR_14'] * 2.0) 
             risk_distance_pence = current_price - stop_loss
             
             if risk_distance_pence > 0:
@@ -325,7 +328,7 @@ if __name__ == "__main__":
     
     logging.info(f"Executing Dual-Strategy AIM audit across {len(tickers)} symbols...")
 
-    buoys_found = 0
+    buys_found = 0
     lottery_found = 0
     watch_found = 0
     scanned_successfully = 0
@@ -339,39 +342,42 @@ if __name__ == "__main__":
         futures = {executor.submit(analyze_stock, ticker, market_3m_return): ticker for ticker in tickers}
         
         for future in concurrent.futures.as_completed(futures):
-            result, metrics, ticker = future.result()
-            
-            if metrics:
-                if metrics.get("rsi"):
-                    scanned_successfully += 1
-                    rsi_accumulator.append(metrics["rsi"])
-                    
-                    if metrics.get("volume_ratio", 0) > highest_vol_ratio:
-                        highest_vol_ratio = metrics["volume_ratio"]
-                        top_vol_ticker = ticker
-                    
-                if metrics.get("market_cap", 0) > 0:
-                    all_market_caps.append((ticker, metrics["market_cap"]))
-                    
-                if metrics.get("shares_outstanding", 0) > 0:
-                    all_shares_data.append((ticker, metrics["shares_outstanding"]))
-
-            if result:
-                sig_type, cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, target_pct = result
-                log_signal_to_csv(ticker, sig_type, cur_p, t_sell, rsi_v, v_rat)
-                logging.info(f"Signal Generated: {sig_type} for {ticker} (Net Profit: £{ideal_prof:.2f})")
+            try:
+                result, metrics, ticker = future.result()
                 
-                if sig_type == "BUY":
-                    buoys_found += 1
-                    if market_is_healthy:
-                        send_discord_embed(ticker, "STRONG BUY", cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, target_pct, 3066993)
-                elif sig_type == "LOTTERY":
-                    lottery_found += 1
-                    if market_is_healthy:
-                        send_discord_embed(ticker, "⚡ LOTTERY MULTI-BAGGER", cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, target_pct, 15158332)
-                elif sig_type == "WATCH":
-                    watch_found += 1
-                    send_discord_embed(ticker, "WATCHLIST", cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, target_pct, 16776960)
+                if metrics:
+                    if metrics.get("rsi"):
+                        scanned_successfully += 1
+                        rsi_accumulator.append(metrics["rsi"])
+                        
+                        if metrics.get("volume_ratio", 0) > highest_vol_ratio:
+                            highest_vol_ratio = metrics["volume_ratio"]
+                            top_vol_ticker = ticker
+                        
+                    if metrics.get("market_cap", 0) > 0:
+                        all_market_caps.append((ticker, metrics["market_cap"]))
+                        
+                    if metrics.get("shares_outstanding", 0) > 0:
+                        all_shares_data.append((ticker, metrics["shares_outstanding"]))
+
+                if result:
+                    sig_type, cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, target_pct = result
+                    log_signal_to_csv(ticker, sig_type, cur_p, t_sell, rsi_v, v_rat)
+                    logging.info(f"Signal Generated: {sig_type} for {ticker} (Net Profit: £{ideal_prof:.2f})")
+                    
+                    if sig_type == "BUY":
+                        buys_found += 1
+                        if market_is_healthy:
+                            send_discord_embed(ticker, "STRONG BUY", cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, target_pct, 3066993)
+                    elif sig_type == "LOTTERY":
+                        lottery_found += 1
+                        if market_is_healthy:
+                            send_discord_embed(ticker, "⚡ LOTTERY MULTI-BAGGER", cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, target_pct, 15158332)
+                    elif sig_type == "WATCH":
+                        watch_found += 1
+                        send_discord_embed(ticker, "WATCHLIST", cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, target_pct, 16776960)
+            except Exception as thread_err:
+                logging.debug(f"Error handling future result: {thread_err}")
 
     avg_rsi = sum(rsi_accumulator) / len(rsi_accumulator) if rsi_accumulator else 0.0
     if not top_vol_ticker and rsi_accumulator:
