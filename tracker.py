@@ -199,12 +199,10 @@ def check_rns_sentiment(stock_obj):
     return True
 
 def run_vectorized_backtest(df):
-    """Module 1: Historical Vectorized Backtest Simulation on Fetched Data"""
     try:
         df = df.copy()
         df['Signal'] = 0
         
-        # Calculate moving averages and indicators for backtest validation
         df['SMA_20'] = df['Close'].rolling(window=20).mean()
         df['SMA_50'] = df['Close'].rolling(window=50).mean()
         df['Vol_20'] = df['Volume'].rolling(window=20).mean()
@@ -220,7 +218,6 @@ def run_vectorized_backtest(df):
         rs = gain / loss
         df['RSI_14'] = 100 - (100 / (1 + rs))
 
-        # Vectorized condition check over historical rows
         conditions = (
             (df['SMA_20'] > df['SMA_50']) & 
             (df['Close'] > df['SMA_20']) & 
@@ -230,8 +227,6 @@ def run_vectorized_backtest(df):
         )
         
         df.loc[conditions, 'Signal'] = 1
-        
-        # Simple forward returns simulation (5-day holding or target hit)
         df['Future_Return'] = df['Close'].shift(-5) / df['Close'] - 1.0
         signal_returns = df.loc[df['Signal'] == 1, 'Future_Return'].dropna()
         
@@ -280,6 +275,7 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
             {"name": "⚖️ R:R Ratio", "value": f"`1:{rr_ratio:.1f}`", "inline": True},
             {"name": "⚡ RSI (14)", "value": f"`{rsi_val:.1f}`", "inline": True},
             {"name": "📊 Volume Surge", "value": f"`{volume_ratio:.1f}x`", "inline": True},
+            {"name": "📦 Sized Shares (£100 Risk)", "value": f"`{recommended_shares} shares`", "inline": True},
             {"name": "🧪 Historical Backtest", "value": f"`{bt_text}`", "inline": False}
         ],
         "footer": {"text": f"AIM Engine • Backtested & Trailing Stops Active"},
@@ -414,12 +410,8 @@ def analyze_stock(ticker, market_3m_return):
         stock_3m_return = (df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1.0
         relative_strength_ok = stock_3m_return > market_3m_return
 
-        # Run historical backtest verification on this asset's data frame
         backtest_stats = run_vectorized_backtest(df)
 
-        # ==========================================
-        # CHECK 1: LOTTERY / MULTI-BAGGER CRITERIA
-        # ==========================================
         is_micro_cap = market_cap <= 25000000.0
         low_float = float_shares <= 50000000.0 if float_shares > 0 else True
         massive_volume = volume_ratio >= 3.0
@@ -432,7 +424,6 @@ def analyze_stock(ticker, market_3m_return):
             true_break_even_price = current_price + fee_per_share_impact + (current_price * dynamic_spread_pct)
             target_sell_price = true_break_even_price * (1.0 + (target_profit_pct / 100.0))
             stop_loss = current_price - (today['ATR_14'] * 2.0) 
-            # Module 2: Dynamic Trailing Stop-Loss calculation (ratschet based on 2x ATR from peak)
             trailing_stop = current_price - (today['ATR_14'] * 1.5)
             
             risk_distance_pence = current_price - stop_loss
@@ -445,9 +436,6 @@ def analyze_stock(ticker, market_3m_return):
                 
                 return ("LOTTERY", current_price, true_break_even_price, stop_loss, target_sell_price, trailing_stop, ideal_profit_gbp, rr_ratio, volume_ratio, daily_turnover, recommended_shares, today['RSI_14'], float_shares, target_profit_pct, backtest_stats), metrics, ticker
 
-        # ==========================================
-        # CHECK 2: STANDARD MOMENTUM BUY CRITERIA
-        # ==========================================
         if market_cap >= 5000000.0 and daily_turnover >= 10000.0:
             target_profit_pct = 15.0
             true_break_even_price = current_price + fee_per_share_impact + (current_price * dynamic_spread_pct)
@@ -468,9 +456,6 @@ def analyze_stock(ticker, market_3m_return):
                         return None, metrics, ticker
                     return ("BUY", current_price, true_break_even_price, stop_loss, target_sell_price, trailing_stop, ideal_profit_gbp, rr_ratio, volume_ratio, daily_turnover, recommended_shares, today['RSI_14'], float_shares, target_profit_pct, backtest_stats), metrics, ticker
             
-            # ==========================================
-            # CHECK 3: WATCHLIST CRITERIA
-            # ==========================================
             distance_to_ma = abs(current_price - today['SMA_50']) / today['SMA_50']
             if distance_to_ma <= 0.015 and is_above_vwap and obv_accumulating and relative_strength_ok and weekly_trend_ok and rsi_healthy and rr_ratio >= 1.8:
                 return ("WATCH", current_price, true_break_even_price, stop_loss, target_sell_price, trailing_stop, ideal_profit_gbp, rr_ratio, volume_ratio, daily_turnover, recommended_shares, today['RSI_14'], float_shares, target_profit_pct, backtest_stats), metrics, ticker
@@ -549,7 +534,7 @@ async def main_async():
                     send_discord_embed(ticker, "⚡ LOTTERY MULTI-BAGGER", cur_p, t_be, s_l, t_sell, t_stop, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, target_pct, bt_stats, 15158332)
             elif sig_type == "WATCH":
                 watch_found += 1
-                send_discord_embed(ticker, "WATCHLIST", cur_p, t_be, s_l, t_sell, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, target_pct, bt_stats, 16776960)
+                send_discord_embed(ticker, "WATCHLIST", cur_p, t_be, s_l, t_sell, t_stop, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, target_pct, bt_stats, 16776960)
 
     avg_rsi = sum(rsi_accumulator) / len(rsi_accumulator) if rsi_accumulator else 0.0
     if not top_vol_ticker and rsi_accumulator:
