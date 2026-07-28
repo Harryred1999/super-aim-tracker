@@ -2,11 +2,12 @@ name: AIM Stock Tracker V20 15-Min
 
 on:
   schedule:
+    # Runs every 15 mins between 08:00 and 17:45 UTC, Monday through Friday
     - cron: '*/15 8-17 * * 1-5'
   workflow_dispatch: 
 
 permissions:
-  contents: write  # 👈 Crucial: Allows the runner to commit files back to repo
+  contents: write # Needed for stefanzweifel/git-auto-commit-action
 
 jobs:
   run-tracker:
@@ -15,11 +16,14 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip' # Speeds up execution by caching installed wheels
 
       - name: Install Dependencies
         run: |
@@ -31,6 +35,7 @@ jobs:
         run: |
           CURRENT_HOUR=$(date -u +%H)
           echo "Current UTC hour: $CURRENT_HOUR"
+          # Adjust this threshold if you are tracking London/AIM market hours (UTC vs BST)
           if [ "$CURRENT_HOUR" -ge 17 ]; then
             echo "MODE=FULL" >> $GITHUB_OUTPUT
           else
