@@ -8,6 +8,7 @@ import random
 import csv
 import sys
 import logging
+import sqlite3
 import concurrent.futures
 from pathlib import Path
 
@@ -32,7 +33,50 @@ MAX_ALLOWABLE_CASH_RISK = 100.0
 MIN_MARKET_CAP = 2000000.0    
 MAX_MARKET_CAP = 1500000000.0 
 MAX_DAY_GAIN_PCT = 15.0       
-ESTIMATED_SPREAD_DRAG = 0.025 
+
+# --- SQLITE STATE DATABASE INITIALIZATION ---
+def init_db():
+    conn = sqlite3.connect("trading_state.db")
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS alerts (
+            ticker TEXT,
+            signal_type TEXT,
+            timestamp TEXT,
+            PRIMARY KEY (ticker, signal_type)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def check_recent_alert(ticker, signal_type, days=5):
+    try:
+        conn = sqlite3.connect("trading_state.db")
+        cursor = conn.cursor()
+        cutoff = (pd.Timestamp.utcnow() - pd.Timedelta(days=days)).isoformat()
+        cursor.execute('''
+            SELECT timestamp FROM alerts 
+            WHERE ticker = ? AND signal_type = ? AND timestamp >= ?
+        ''', (ticker, signal_type, cutoff))
+        result = cursor.fetchone()
+        conn.close()
+        return result is not None
+    except Exception as e:
+        logging.error(f"Database check failed for {ticker}: {e}")
+        return False
+
+def record_alert(ticker, signal_type):
+    try:
+        conn = sqlite3.connect("trading_state.db")
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO alerts (ticker, signal_type, timestamp)
+            VALUES (?, ?, ?)
+        ''', (ticker, signal_type, pd.Timestamp.utcnow().isoformat()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Database record failed for {ticker}: {e}")
 
 def get_dynamic_aim_universe():
     logging.info("Drawing live equity universe via TradingView API...")
@@ -93,6 +137,17 @@ def check_market_regime(df_mkt):
         pass
     return True
 
+def fetch_history_with_retry(stock_obj, period="3mo", retries=3):
+    for attempt in range(1, retries + 1):
+        try:
+            df = stock_obj.history(period=period)
+            if not df.empty and len(df) >= 50:
+                return df
+        except Exception as e:
+            logging.debug(f"Retry {attempt}/{retries} failed fetching history: {e}")
+            time.sleep(attempt * 1.5)
+    return pd.DataFrame()
+
 def log_signal_to_csv(ticker, signal_type, current_price, target_sell_price, rsi_val, volume_ratio):
     try:
         file_path = Path("trade_history.csv")
@@ -118,7 +173,7 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
         "title": f"🎯⚖️ {signal_type}: {ticker}",
         "url": yahoo_url,
         "color": color,
-        "description": f"Unified Engine Alert with **{target_profit_pct}% Profit Target** (£500 Sizing / £100 Risk).",
+        "description": f"Enhanced Unified Engine Alert with **{target_profit_pct}% Profit Target** (£500 Sizing / £100 Risk).",
         "fields": [
             {"name": "💵 Current Price", "value": f"`{current_price:.2f}p`", "inline": True},
             {"name": "🛡️ True Break-Even", "value": f"`{true_break_even:.2f}p`", "inline": True},
@@ -131,7 +186,7 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
             {"name": "🧬 Free Float", "value": f"`{float_display}`", "inline": True},
             {"name": "📦 Sized Shares (£100 Risk)", "value": f"`{recommended_shares} shares`", "inline": True}
         ],
-        "footer": {"text": f"AIM Unified Dual-Strategy Engine • Active"},
+        "footer": {"text": f"AIM Engine • SQLite Deduplicated & Stress-Tested"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     try:
@@ -156,7 +211,7 @@ def send_enhanced_summary_digest(scanned_count, buys_found, lottery_found, watch
     embed = {
         "title": f"📊 End-of-Day Dual-Strategy Audit Digest",
         "color": 3447003,
-        "description": f"Comprehensive multi-threaded session audit completed.",
+        "description": f"Comprehensive multi-threaded session audit completed with state persistence.",
         "fields": [
             {"name": "🔍 Total Scanned", "value": f"`{scanned_count}`", "inline": True},
             {"name": "🌐 Market Regime", "value": f"`{status_text}`", "inline": True},
@@ -194,9 +249,9 @@ def analyze_stock(ticker, market_3m_return):
         shares_outstanding = info.get('sharesOutstanding', 0) or 0
         float_shares = info.get('floatShares', 0) or 0
 
-        df = stock.history(period="3mo")
+        df = fetch_history_with_retry(stock, period="3mo")
         if df.empty or len(df) < 50:
-            df = stock.history(period="6mo")
+            df = fetch_history_with_retry(stock, period="6mo")
         
         if df.empty or len(df) < 50:
             return None, metrics, ticker
@@ -253,6 +308,10 @@ def analyze_stock(ticker, market_3m_return):
         raw_shares = CAPITAL_PER_TRADE / (current_price / 100)
         fee_per_share_impact = (HL_FEE_TOTAL / raw_shares) * 100 if raw_shares > 0 else 0
         
+        # Dynamic Spread Drag calculation based on intraday High-Low relative to current price
+        session_spread = today['High'] - today['Low']
+        dynamic_spread_pct = max(0.015, session_spread / current_price) if current_price > 0 else 0.025
+
         df_weekly = df.resample('W').agg({'Close': 'last'})
         df_weekly['EMA_10'] = df_weekly['Close'].ewm(span=10, adjust=False).mean()
         weekly_trend_ok = len(df_weekly) >= 10 and df_weekly['Close'].iloc[-1] >= df_weekly['EMA_10'].iloc[-1]
@@ -274,7 +333,7 @@ def analyze_stock(ticker, market_3m_return):
 
         if is_micro_cap and low_float and massive_volume and is_above_vwap and rsi_healthy:
             target_profit_pct = 50.0  
-            true_break_even_price = current_price + fee_per_share_impact + (current_price * ESTIMATED_SPREAD_DRAG)
+            true_break_even_price = current_price + fee_per_share_impact + (current_price * dynamic_spread_pct)
             target_sell_price = true_break_even_price * (1.0 + (target_profit_pct / 100.0))
             stop_loss = current_price - (today['ATR_14'] * 2.0) 
             risk_distance_pence = current_price - stop_loss
@@ -293,7 +352,7 @@ def analyze_stock(ticker, market_3m_return):
         # ==========================================
         if market_cap >= 5000000.0 and daily_turnover >= 10000.0:
             target_profit_pct = 15.0
-            true_break_even_price = current_price + fee_per_share_impact + (current_price * ESTIMATED_SPREAD_DRAG)
+            true_break_even_price = current_price + fee_per_share_impact + (current_price * dynamic_spread_pct)
             target_sell_price = true_break_even_price * (1.0 + (target_profit_pct / 100.0))
             stop_loss = current_price - (today['ATR_14'] * 1.5)
             risk_distance_pence = current_price - stop_loss
@@ -322,11 +381,12 @@ def analyze_stock(ticker, market_3m_return):
     return None, metrics, ticker
 
 if __name__ == "__main__":
+    init_db()
     tickers = get_dynamic_aim_universe()
     df_mkt_series, market_3m_return = get_market_benchmark_returns()
     market_is_healthy = check_market_regime(df_mkt_series)
     
-    logging.info(f"Executing Dual-Strategy AIM audit across {len(tickers)} symbols...")
+    logging.info(f"Executing Enhanced Dual-Strategy AIM audit across {len(tickers)} symbols...")
 
     buys_found = 0
     lottery_found = 0
@@ -362,6 +422,13 @@ if __name__ == "__main__":
 
                 if result:
                     sig_type, cur_p, t_be, s_l, t_sell, ideal_prof, rr, v_rat, turnover, rec_shares, rsi_v, float_shs, target_pct = result
+                    
+                    # SQLite Deduplication Check (Skip if alerted within past 5 days)
+                    if check_recent_alert(ticker, sig_type, days=5):
+                        logging.info(f"Skipping alert for {ticker} ({sig_type}) - already triggered within last 5 days.")
+                        continue
+                    
+                    record_alert(ticker, sig_type)
                     log_signal_to_csv(ticker, sig_type, cur_p, t_sell, rsi_v, v_rat)
                     logging.info(f"Signal Generated: {sig_type} for {ticker} (Net Profit: £{ideal_prof:.2f})")
                     
@@ -389,4 +456,4 @@ if __name__ == "__main__":
         
     send_enhanced_summary_digest(scanned_successfully, buys_found, lottery_found, watch_found, market_is_healthy, top_vol_ticker, highest_vol_ratio, avg_rsi, all_market_caps[:10], all_shares_data[:10])
 
-    logging.info(f"Dual-Strategy Audit Complete. Successfully analyzed {scanned_successfully} records.")
+    logging.info(f"Enhanced Dual-Strategy Audit Complete. Successfully analyzed {scanned_successfully} records.")
