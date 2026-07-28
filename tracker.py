@@ -6,7 +6,6 @@ import time
 import random
 import csv
 from pathlib import Path
-from pytickersymbols import PyTickerSymbols
 
 # --- CONFIGURATION & PARAMETERS ---
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
@@ -22,21 +21,33 @@ ESTIMATED_SPREAD_DRAG = 0.025
 MIN_RISK_REWARD_RATIO = 2.0   
 
 def get_dynamic_aim_universe():
-    print("Fetching dynamic market universe...")
+    print("Automatically drawing live market universe via TradingView API...")
     aim_tickers = []
     try:
-        stock_data = PyTickerSymbols()
-        uk_stocks = stock_data.get_stocks_by_exchange("LSE")
-        for stock in uk_stocks:
-            for sym_entry in stock.get('symbols', []):
-                symbol_str = str(sym_entry.get('symbol', '')).strip().upper()
-                if symbol_str.endswith('.L') and symbol_str not in aim_tickers:
-                    aim_tickers.append(symbol_str)
-        print(f"Successfully loaded {len(aim_tickers)} dynamic LSE/AIM securities.")
+        url = "https://scanner.tradingview.com/uk/scan"
+        payload = {
+            "columns": ["name"],
+            "filter": [{"left": "exchange", "operation": "equal", "right": "LSE"}]
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        data = response.json()
+        
+        for row in data.get("data", []):
+            ticker = row["d"][0]
+            # Standardize for Yahoo Finance by appending .L to UK stocks
+            if "." not in ticker: 
+                aim_tickers.append(f"{ticker}.L")
+                
+        print(f"Successfully drew {len(aim_tickers)} live securities.")
     except Exception as e:
-        print(f"Error fetching dynamic registry: {e}. Engaging fallback.")
+        print(f"Error drawing live registry: {e}. Engaging emergency fallback.")
         aim_tickers = ["BOO.L", "FDEV.L", "JET2.L", "IQE.L", "BUR.L", "ASC.L"]
-    return aim_tickers
+        
+    return list(set(aim_tickers))
 
 def check_market_regime():
     try:
