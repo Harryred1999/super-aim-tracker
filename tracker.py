@@ -32,17 +32,21 @@ MAX_ALLOWABLE_CASH_RISK = 12.50
 TARGET_PROFIT_PCT = 15.0      # Ideal net profit percentage target
 MIN_DAILY_TURNOVER = 15000.0  
 MIN_MARKET_CAP = 3000000.0    
+MAX_MARKET_CAP = 1500000000.0 # AIM Tighter Ceiling: Excludes Main Market FTSE giants (£1.5B limit)
 MIN_VOLUME_MULTIPLIER = 2.2   
 ESTIMATED_SPREAD_DRAG = 0.025 
 MIN_RISK_REWARD_RATIO = 2.0   
 MAX_DAY_GAIN_PCT = 12.0       # Safety filter: Skip if stock already surged >12% today
 
 def get_dynamic_aim_universe():
-    logging.info("Drawing live market universe via TradingView API...")
+    logging.info("Drawing live equity universe via TradingView API...")
     url = "https://scanner.tradingview.com/uk/scan"
     payload = {
         "columns": ["name"],
-        "filter": [{"left": "exchange", "operation": "equal", "right": "LSE"}]
+        "filter": [
+            {"left": "exchange", "operation": "equal", "right": "LSE"},
+            {"left": "type", "operation": "equal", "right": "stock"}
+        ]
     }
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -57,11 +61,11 @@ def get_dynamic_aim_universe():
             aim_tickers = []
             for row in data.get("data", []):
                 ticker = row["d"][0]
-                # Filter out dots, warrants, structured notes, and weird codes like '0o'
+                # Filter out dots, warrants, structured notes, and weird codes like '0o', hyphens, or slashes
                 if "." not in ticker and "0o" not in ticker.lower() and "-" not in ticker and "/" not in ticker:
                     aim_tickers.append(f"{ticker}.L")
                     
-            logging.info(f"Successfully drew and cleaned {len(aim_tickers)} live securities.")
+            logging.info(f"Successfully drew and cleaned {len(aim_tickers)} live equity securities.")
             return list(set(aim_tickers))
             
         except Exception as e:
@@ -125,7 +129,7 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
             {"name": "📊 Volume Surge", "value": f"`{volume_ratio:.1f}x`", "inline": True},
             {"name": "📦 Sized Shares (£12.50 Risk)", "value": f"`{recommended_shares} shares`", "inline": True}
         ],
-        "footer": {"text": f"AIM Engine V25 • Active Trade Verification Edition"},
+        "footer": {"text": f"AIM Engine V25 • Strict AIM Equity Edition"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     try:
@@ -161,7 +165,7 @@ def send_enhanced_summary_digest(scanned_count, buoys_found, watch_found, regime
             {"name": "📉 Top 10 Lowest Market Caps", "value": caps_text, "inline": False},
             {"name": "📊 Top 10 Lowest Shares in Issue", "value": shares_text, "inline": False}
         ],
-        "footer": {"text": f"AIM Engine V25 • Active Trade Filter Active"},
+        "footer": {"text": f"AIM Engine V25 • AIM Filter Active"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     try:
@@ -174,7 +178,18 @@ def analyze_stock(ticker, market_3m_return):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info or {}
+        
+        # --- STRICT ASSET TYPE CHECK: REJECT BONDS, GILTS, AND FUNDS ---
+        quote_type = info.get('quoteType', 'EQUITY')
+        if quote_type and quote_type.upper() != 'EQUITY':
+            return None, metrics, ticker
+
         market_cap = info.get('marketCap', 0) or 0
+        
+        # --- STRICT AIM MARKET CAP CEILING (REJECT MAIN MARKET GIANTS) ---
+        if market_cap < MIN_MARKET_CAP or market_cap > MAX_MARKET_CAP:
+            return None, metrics, ticker
+
         shares_outstanding = info.get('sharesOutstanding', 0) or 0
 
         df = stock.history(period="3mo")
@@ -187,8 +202,7 @@ def analyze_stock(ticker, market_3m_return):
         current_price = df['Close'].iloc[-1]
         today_volume = df['Volume'].iloc[-1]
 
-        # --- STRICT TRADING & LIQUIDITY CHECK ---
-        # Discard dormant/suspended stocks with 0 volume, 0 price, or missing data
+        # --- STRICT TRADING & LIQUIDITY CHECK (REJECT 0 VOLUME/0 PRICE DORMANT STOCKS) ---
         if pd.isna(current_price) or current_price <= 0 or pd.isna(today_volume) or today_volume <= 0:
             return None, metrics, ticker
         
@@ -233,9 +247,6 @@ def analyze_stock(ticker, market_3m_return):
         avg_volume = yesterday['Vol_20'] if (yesterday['Vol_20'] and yesterday['Vol_20'] > 0) else 1
         volume_ratio = today['Volume'] / avg_volume
         metrics["volume_ratio"] = volume_ratio
-
-        if market_cap and market_cap < MIN_MARKET_CAP:
-            return None, metrics, ticker
 
         daily_turnover = (today['Volume'] * current_price) / 100
         if daily_turnover < MIN_DAILY_TURNOVER:
