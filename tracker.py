@@ -257,14 +257,13 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
         return
         
     yahoo_url = f"https://finance.yahoo.com/quote/{ticker}"
-    float_display = f"{float_shares:,.0f}" if float_shares > 0 else "N/A"
     bt_text = f"Win Rate: {backtest_stats['win_rate']*100:.1f}% ({backtest_stats['sample_size']} historical setups)" if backtest_stats['sample_size'] > 0 else "N/A"
     
     embed = {
         "title": f"🎯⚖️ {signal_type}: {ticker}",
         "url": yahoo_url,
         "color": color,
-        "description": f"Engine Alert with **{target_profit_pct}% Profit Target** & Trailing ATR Management.",
+        "description": f"Engine Alert with **{target_profit_pct}% Profit Target** & Trailing ATR Management (Dual Capital & Risk Capped).",
         "fields": [
             {"name": "💵 Current Price", "value": f"`{current_price:.2f}p`", "inline": True},
             {"name": "🛡️ True Break-Even", "value": f"`{true_break_even:.2f}p`", "inline": True},
@@ -275,10 +274,10 @@ def send_discord_embed(ticker, signal_type, current_price, true_break_even, stop
             {"name": "⚖️ R:R Ratio", "value": f"`1:{rr_ratio:.1f}`", "inline": True},
             {"name": "⚡ RSI (14)", "value": f"`{rsi_val:.1f}`", "inline": True},
             {"name": "📊 Volume Surge", "value": f"`{volume_ratio:.1f}x`", "inline": True},
-            {"name": "📦 Sized Shares (£100 Risk)", "value": f"`{recommended_shares} shares`", "inline": True},
+            {"name": "📦 Sized Shares (£500 Cap / £100 Risk)", "value": f"`{recommended_shares} shares`", "inline": True},
             {"name": "🧪 Historical Backtest", "value": f"`{bt_text}`", "inline": False}
         ],
-        "footer": {"text": f"AIM Engine • Backtested & Trailing Stops Active"},
+        "footer": {"text": f"AIM Engine • Dual-Cap Position Sizing Active"},
         "timestamp": pd.Timestamp.utcnow().isoformat()
     }
     try:
@@ -303,7 +302,7 @@ def send_enhanced_summary_digest(scanned_count, buys_found, lottery_found, watch
     embed = {
         "title": f"📊 End-of-Day Engine Audit Digest",
         "color": 3447003,
-        "description": f"Comprehensive asynchronous audit completed with backtesting and trailing stop safeguards.",
+        "description": f"Comprehensive asynchronous audit completed with dual-cap position sizing safeguards.",
         "fields": [
             {"name": "🔍 Total Scanned", "value": f"`{scanned_count}`", "inline": True},
             {"name": "🌐 Market Regime", "value": f"`{status_text}`", "inline": True},
@@ -392,9 +391,6 @@ def analyze_stock(ticker, market_3m_return):
 
         daily_turnover = (today['Volume'] * current_price) / 100
         
-        raw_shares = CAPITAL_PER_TRADE / (current_price / 100)
-        fee_per_share_impact = (HL_FEE_TOTAL / raw_shares) * 100 if raw_shares > 0 else 0
-        
         session_spread = today['High'] - today['Low']
         dynamic_spread_pct = max(0.015, session_spread / current_price) if current_price > 0 else 0.025
 
@@ -421,6 +417,7 @@ def analyze_stock(ticker, market_3m_return):
                 return None, metrics, ticker
 
             target_profit_pct = 50.0  
+            fee_per_share_impact = (HL_FEE_TOTAL / (CAPITAL_PER_TRADE / (current_price / 100.0))) * 100 if current_price > 0 else 0
             true_break_even_price = current_price + fee_per_share_impact + (current_price * dynamic_spread_pct)
             target_sell_price = true_break_even_price * (1.0 + (target_profit_pct / 100.0))
             stop_loss = current_price - (today['ATR_14'] * 2.0) 
@@ -431,13 +428,19 @@ def analyze_stock(ticker, market_3m_return):
                 reward_distance_pence = target_sell_price - current_price
                 rr_ratio = reward_distance_pence / risk_distance_pence
                 risk_per_share_gbp = risk_distance_pence / 100.0
-                recommended_shares = max(1, int(MAX_ALLOWABLE_CASH_RISK / risk_per_share_gbp))
+                
+                # Dual-cap position sizing
+                shares_by_risk = int(MAX_ALLOWABLE_CASH_RISK / risk_per_share_gbp)
+                max_shares_by_capital = CAPITAL_PER_TRADE / (current_price / 100.0)
+                recommended_shares = max(1, min(shares_by_risk, int(max_shares_by_capital)))
+                
                 ideal_profit_gbp = (recommended_shares * (target_sell_price - true_break_even_price)) / 100.0
                 
                 return ("LOTTERY", current_price, true_break_even_price, stop_loss, target_sell_price, trailing_stop, ideal_profit_gbp, rr_ratio, volume_ratio, daily_turnover, recommended_shares, today['RSI_14'], float_shares, target_profit_pct, backtest_stats), metrics, ticker
 
         if market_cap >= 5000000.0 and daily_turnover >= 10000.0:
             target_profit_pct = 15.0
+            fee_per_share_impact = (HL_FEE_TOTAL / (CAPITAL_PER_TRADE / (current_price / 100.0))) * 100 if current_price > 0 else 0
             true_break_even_price = current_price + fee_per_share_impact + (current_price * dynamic_spread_pct)
             target_sell_price = true_break_even_price * (1.0 + (target_profit_pct / 100.0))
             stop_loss = current_price - (today['ATR_14'] * 1.5)
@@ -448,7 +451,12 @@ def analyze_stock(ticker, market_3m_return):
                 reward_distance_pence = target_sell_price - current_price
                 rr_ratio = reward_distance_pence / risk_distance_pence
                 risk_per_share_gbp = risk_distance_pence / 100.0
-                recommended_shares = max(1, int(MAX_ALLOWABLE_CASH_RISK / risk_per_share_gbp))
+                
+                # Dual-cap position sizing
+                shares_by_risk = int(MAX_ALLOWABLE_CASH_RISK / risk_per_share_gbp)
+                max_shares_by_capital = CAPITAL_PER_TRADE / (current_price / 100.0)
+                recommended_shares = max(1, min(shares_by_risk, int(max_shares_by_capital)))
+                
                 ideal_profit_gbp = (recommended_shares * (target_sell_price - true_break_even_price)) / 100.0
 
                 if is_golden_cross and is_above_trend and is_above_vwap and obv_accumulating and relative_strength_ok and weekly_trend_ok and rsi_healthy and volume_ratio >= 1.3 and rr_ratio >= 1.8:
